@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    type: local
+spec:
+  storageClassName: manual
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /opt/jenkins
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jenkins-claim
+  namespace: jenkins
+spec:
+  storageClassName: manual
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: jenkins
+  namespace: jenkins
+secrets:
+- name: jenkins-secret
+---
+kind: Role
+apiVersion: rbac.authorization.k8s.io/v1
+metadata:
+  name: jenkins
+  namespace: jenkins
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: [""]
+  resources: ["pods/exec"]
+  verbs: ["create","delete","get","list","patch","update","watch"]
+- apiGroups: [""]
+  resources: ["pods/log"]
+  verbs: ["get","list","watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["watch"]
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get","list","update","watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: jenkins
+  namespace: jenkins
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: jenkins
+subjects:
+- kind: ServiceAccount
+  name: jenkins
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins-ui
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  type: NodePort
+  selector:
+    app: jenkins
+  ports:
+    - port: 8080
+      targetPort: 8080
+      nodePort: 32000
+  selector:
+    app: jenkins
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jenkins
+  namespace: jenkins
+  labels:
+    app: jenkins
+spec:
+  type: ClusterIP
+  ports:
+    - name: jenkins-ui
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: jenkins-agent
+      port: 50000
+      protocol: TCP
+    - name: http
+      port: 80
+      targetPort: 8080
+  selector:
+    app: jenkins
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: jenkins
+  namespace: jenkins
+spec:
+  selector:
+    matchLabels:
+      app: jenkins # has to match .spec.template.metadata.labels
+  serviceName: jenkins
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: jenkins
+        name: jenkins
+      name: jenkins
+    spec:
+      serviceAccountName: jenkins
+      terminationGracePeriodSeconds: 10
+      containers:
+      - env:
+        - name: JAVA_OPTS
+          value: -Xmx2048m -Dhudson.slaves.NodeProvisioner.MARGIN=50 -Dhudson.slaves.NodeProvisioner.MARGIN0=0.85
+        name: jenkins
+        image: jenkins/jenkins:lts-alpine
+        ports:
+        - containerPort: 8080
+          name: jenkins
+        - containerPort: 50000
+          name: jenkins-agent
+        volumeMounts:
+        - name: jenkins
+          mountPath: /var/jenkins_home
+        securityContext:
+          runAsUser: 0
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: jenkins
+        persistentVolumeClaim:
+          claimName: jenkins-claim
